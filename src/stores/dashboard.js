@@ -148,6 +148,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         break
       case 'overage':
       case 'analytics':
+      case 'makecall':
       case 'plan':
       case 'contact':
         break

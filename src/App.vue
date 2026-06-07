@@ -21,6 +21,7 @@
           <Analytics   v-show="store.activeTab === 'analytics'" />
           <CallLog     v-show="store.activeTab === 'calllog'" />
           <Transcripts v-show="store.activeTab === 'transcripts'" />
+          <MakeCall    v-show="store.activeTab === 'makecall'" />
           <Invoices    v-show="store.activeTab === 'invoices'" />
           <Overage     v-show="store.activeTab === 'overage'" />
           <Plan        v-show="store.activeTab === 'plan'" />
@@ -40,6 +41,7 @@ import Overview    from '@/views/Overview.vue'
 import Analytics   from '@/views/Analytics.vue'
 import CallLog     from '@/views/CallLog.vue'
 import Transcripts from '@/views/Transcripts.vue'
+import MakeCall    from '@/views/MakeCall.vue'
 import Invoices    from '@/views/Invoices.vue'
 import Overage     from '@/views/Overage.vue'
 import Plan        from '@/views/Plan.vue'
