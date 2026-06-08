@@ -226,6 +226,60 @@ async function safeFetch(requestKey, url, fallback) {
   }
 }
 
+async function safePost(requestKey, url, body) {
+  if (!url) {
+    throw new Error(`Missing webhook URL for ${requestKey}.`)
+  }
+
+  cancelRequest(requestKey)
+
+  const controller = new AbortController()
+  inflight.set(requestKey, controller)
+
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, FETCH_TIMEOUT_MS)
+
+  console.log(`[NAP][API] POST -> ${requestKey}: ${url}`)
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+
+    const text = await response.text()
+    const payload = text ? JSON.parse(text) : {}
+
+    if (!response.ok) {
+      throw new Error(payload?.error || `HTTP ${response.status}`)
+    }
+
+    console.log(`[NAP][API] POST <- ${requestKey}:`, payload)
+    return payload
+  } catch (error) {
+    if (error?.name === 'AbortError' && !timedOut) {
+      throw new CancelledRequestError(requestKey)
+    }
+
+    const reason = timedOut ? `timeout (${FETCH_TIMEOUT_MS}ms)` : (error?.message || 'Unknown error')
+    console.error(`[NAP][API] POST error ${requestKey}:`, reason)
+    throw new Error(reason)
+  } finally {
+    clearTimeout(timer)
+    if (inflight.get(requestKey) === controller) {
+      inflight.delete(requestKey)
+    }
+  }
+}
+
 export const useApi = () => ({
   cancelAllRequests,
   isCancelledError: (error) => error?.name === 'CancelledRequestError',
@@ -257,5 +311,15 @@ export const useApi = () => ({
 
     const payload = await safeFetch('analytics', url, () => generateChartData(rangeIndex))
     return normalizeAnalyticsPayload(payload)
+  },
+
+  createOutboundCalls: async (contacts) => {
+    const payload = await safePost('outboundCalls', WEBHOOKS.outboundCalls, { contacts })
+
+    if (!payload?.success) {
+      throw new Error(payload?.error || 'n8n did not return a Retell batch response.')
+    }
+
+    return payload
   },
 })

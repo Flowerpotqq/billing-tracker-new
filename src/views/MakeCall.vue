@@ -4,7 +4,7 @@
       <h2 class="text-[24px] font-black tracking-tight mb-1">
         <span class="text-grad-accent">Make a Call</span>
       </h2>
-      <p class="text-sm text-nap-text-2">Upload outbound contacts for review before Retell AI calling is connected</p>
+      <p class="text-sm text-nap-text-2">Upload outbound contacts, review them, and send the batch to Retell AI</p>
     </div>
 
     <div class="grid grid-cols-3 gap-4 mb-5">
@@ -20,8 +20,8 @@
       </div>
       <div class="glass-card p-5 animate-tab-enter" style="animation-delay:80ms">
         <div class="label-sm">Retell Status</div>
-        <div class="text-[22px] font-black text-grad-primary mt-1">Not Connected</div>
-        <div class="pending-chip mt-2.5">Preview only</div>
+        <div class="text-[22px] font-black text-grad-primary mt-1">{{ retellStatus }}</div>
+        <div :class="['status-chip mt-2.5', submitState]">{{ retellStatusDetail }}</div>
       </div>
     </div>
 
@@ -75,8 +75,12 @@
           </div>
         </div>
 
-        <button class="submit-btn mt-5" disabled>
-          Submit to Retell AI later
+        <button
+          :class="['submit-btn mt-5', { disabled: !canSubmit }]"
+          :disabled="!canSubmit"
+          @click="submitContacts"
+        >
+          {{ submitButtonLabel }}
         </button>
       </div>
 
@@ -123,7 +127,9 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { useApi } from '@/composables/useApi'
 
+const api = useApi()
 const REQUIRED_COLUMNS = {
   phoneNumber: ['phone number', 'phone', 'phone_number', 'phonenumber', 'number'],
   firstName: ['first name', 'firstname', 'first_name', 'first'],
@@ -138,9 +144,30 @@ const contacts = ref([])
 const rowErrors = ref([])
 const fileErrors = ref([])
 const isDragging = ref(false)
+const submitState = ref('idle')
+const submitMessage = ref('')
+const retellResponse = ref(null)
 
 const validContacts = computed(() => contacts.value.filter((contact) => contact.isValid))
 const previewContacts = computed(() => validContacts.value.slice(0, PREVIEW_LIMIT))
+const canSubmit = computed(() => validContacts.value.length > 0 && fileErrors.value.length === 0 && submitState.value !== 'submitting')
+const retellStatus = computed(() => {
+  if (submitState.value === 'success') return 'Connected'
+  if (submitState.value === 'error') return 'Needs Attention'
+  if (submitState.value === 'submitting') return 'Submitting'
+  return 'Ready'
+})
+const retellStatusDetail = computed(() => {
+  if (submitState.value === 'success') return 'Batch sent'
+  if (submitState.value === 'error') return 'Submission failed'
+  if (submitState.value === 'submitting') return 'Sending contacts'
+  return 'n8n webhook'
+})
+const submitButtonLabel = computed(() => {
+  if (submitState.value === 'submitting') return 'Sending to Retell AI...'
+  if (validContacts.value.length === 0) return 'Upload contacts first'
+  return `Submit ${validContacts.value.length} contacts`
+})
 const messages = computed(() => {
   const list = fileErrors.value.map((text) => ({ type: 'error', text }))
 
@@ -154,6 +181,10 @@ const messages = computed(() => {
 
   if (rowErrors.value.length > 5) {
     list.push({ type: 'warning', text: `${rowErrors.value.length - 5} additional rows have validation issues.` })
+  }
+
+  if (submitMessage.value) {
+    list.push({ type: submitState.value === 'success' ? 'success' : 'error', text: submitMessage.value })
   }
 
   return list
@@ -193,6 +224,10 @@ function splitCsvLine(line) {
   return values
 }
 
+function normalizePhoneNumber(value) {
+  return String(value || '').trim().replace(/[\s().-]/g, '')
+}
+
 function parseCsv(text) {
   const lines = text
     .replace(/^\uFEFF/, '')
@@ -228,7 +263,7 @@ function parseCsv(text) {
   lines.slice(1).forEach((line, index) => {
     const rowNumber = index + 2
     const values = splitCsvLine(line)
-    const phoneNumber = values[columnIndexes.phoneNumber]?.trim() || ''
+    const phoneNumber = normalizePhoneNumber(values[columnIndexes.phoneNumber])
     const firstName = values[columnIndexes.firstName]?.trim() || ''
     const lastName = values[columnIndexes.lastName]?.trim() || ''
     const hasAnyContactData = Boolean(phoneNumber || firstName || lastName)
@@ -238,10 +273,12 @@ function parseCsv(text) {
       return
     }
 
-    const isValid = Boolean(phoneNumber)
+    const isValid = Boolean(phoneNumber) && /^\+[1-9]\d{6,14}$/.test(phoneNumber)
 
-    if (!isValid) {
+    if (!phoneNumber) {
       parsedErrors.push({ rowNumber, message: 'Phone number is required.' })
+    } else if (!isValid) {
+      parsedErrors.push({ rowNumber, message: 'Phone number must be in E.164 format, for example +14165551234.' })
     }
 
     parsedContacts.push({
@@ -270,6 +307,9 @@ function clearFile() {
   contacts.value = []
   rowErrors.value = []
   fileErrors.value = []
+  submitState.value = 'idle'
+  submitMessage.value = ''
+  retellResponse.value = null
 
   if (fileInputRef.value) {
     fileInputRef.value.value = ''
@@ -315,6 +355,32 @@ function handleDrop(event) {
   const file = event.dataTransfer.files?.[0]
   if (file) readFile(file)
 }
+
+async function submitContacts() {
+  if (!canSubmit.value) return
+
+  submitState.value = 'submitting'
+  submitMessage.value = ''
+  retellResponse.value = null
+
+  try {
+    const payload = validContacts.value.map((contact) => ({
+      phoneNumber: contact.phoneNumber,
+      firstName: contact.firstName,
+      lastName: contact.lastName,
+    }))
+
+    const response = await api.createOutboundCalls(payload)
+    retellResponse.value = response
+    submitState.value = 'success'
+    submitMessage.value = response?.retell?.batch_call_id
+      ? `Retell batch created: ${response.retell.batch_call_id}`
+      : 'Contacts were submitted to Retell AI.'
+  } catch (error) {
+    submitState.value = 'error'
+    submitMessage.value = error?.message || 'Unable to submit contacts.'
+  }
+}
 </script>
 
 <style scoped>
@@ -352,15 +418,31 @@ function handleDrop(event) {
 .message-row.success { background: var(--ok-light); border-color: var(--ok-border); color: var(--c-teal); }
 .message-row.warning { background: var(--warn-light); border-color: var(--warn-border); color: #c27800; }
 .message-row.error { background: var(--danger-light); border-color: var(--danger-border); color: #e03050; }
-.pending-chip {
+.status-chip {
   display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 8px;
-  background: var(--warn-light); border: 1px solid var(--warn-border);
-  font-size: 11px; color: #c27800; font-weight: 800;
+  font-size: 11px; font-weight: 800;
+}
+.status-chip.idle, .status-chip.submitting {
+  background: var(--warn-light); border: 1px solid var(--warn-border); color: #c27800;
+}
+.status-chip.success {
+  background: var(--ok-light); border: 1px solid var(--ok-border); color: var(--c-teal);
+}
+.status-chip.error {
+  background: var(--danger-light); border: 1px solid var(--danger-border); color: #e03050;
 }
 .submit-btn {
   width: 100%; padding: 10px 14px; border-radius: 10px; border: none;
-  background: rgba(91,63,143,0.12); color: #8e82a0; font-size: 12px; font-weight: 800;
-  cursor: not-allowed;
+  background: var(--grad-accent); color: #fff; font-size: 12px; font-weight: 800;
+  cursor: pointer; box-shadow: var(--shadow-glow);
+  transition: opacity .16s, transform .16s;
+}
+.submit-btn:hover { transform: translateY(-1px); }
+.submit-btn.disabled {
+  background: rgba(91,63,143,0.12); color: #8e82a0; cursor: not-allowed; box-shadow: none;
+}
+.submit-btn.disabled:hover {
+  transform: none;
 }
 .table-header {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

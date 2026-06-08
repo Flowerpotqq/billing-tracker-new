@@ -1,0 +1,198 @@
+{
+  "name": "NAP Outbound Retell Batch Calls",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nap/outbound/retell-batch-v2",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8c4f80db-8a71-4c23-a73e-feb7ed920001",
+      "name": "Receive Dashboard Contacts",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "webhookId": "nap-outbound-retell-batch-v2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const requestBody = $json.body || $json;\nconst contacts = requestBody.contacts;\n\nif (!Array.isArray(contacts)) {\n  return [{\n    json: {\n      ok: false,\n      statusCode: 400,\n      error: 'Request must include contacts as an array.',\n      invalidRows: []\n    }\n  }];\n}\n\nif (contacts.length === 0) {\n  return [{\n    json: {\n      ok: false,\n      statusCode: 400,\n      error: 'Contacts array cannot be empty.',\n      invalidRows: []\n    }\n  }];\n}\n\nconst normalizePhone = (value) => String(value || '').trim().replace(/[\\s().-]/g, '');\nconst invalidRows = [];\nconst tasks = [];\n\ncontacts.forEach((contact, index) => {\n  const phoneNumber = normalizePhone(contact.phoneNumber || contact.phone_number || contact.phone || contact.number);\n  const firstName = String(contact.firstName || contact.first_name || '').trim();\n  const lastName = String(contact.lastName || contact.last_name || '').trim();\n  const fullName = `${firstName} ${lastName}`.trim();\n\n  if (!phoneNumber) {\n    invalidRows.push({ row: index + 1, reason: 'Missing phone number.' });\n    return;\n  }\n\n  if (!/^\\+[1-9]\\d{6,14}$/.test(phoneNumber)) {\n    invalidRows.push({\n      row: index + 1,\n      phoneNumber,\n      reason: 'Phone number must be E.164 format, for example +14165551234.'\n    });\n    return;\n  }\n\n  tasks.push({\n    to_number: phoneNumber,\n    retell_llm_dynamic_variables: {\n      first_name: firstName,\n      last_name: lastName,\n      name: fullName\n    },\n    metadata: {\n      source: 'nap-dashboard-csv',\n      first_name: firstName,\n      last_name: lastName\n    }\n  });\n});\n\nif (invalidRows.length > 0) {\n  return [{\n    json: {\n      ok: false,\n      statusCode: 400,\n      error: 'Some contacts are invalid.',\n      invalidRows\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    ok: true,\n    statusCode: 200,\n    retellPayload: {\n      from_number: '+12629779089',\n      name: requestBody.name || 'Dashboard CSV outbound call batch',\n      tasks\n    }\n  }\n}];"
+      },
+      "id": "8c4f80db-8a71-4c23-a73e-feb7ed920002",
+      "name": "Validate And Build Retell Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "8c4f80db-8a71-4c23-a73e-feb7ed920003",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8c4f80db-8a71-4c23-a73e-feb7ed920004",
+      "name": "Payload Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.retellai.com/create-batch-call",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer PASTE_RETELL_API_KEY_HERE"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.retellPayload) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "8c4f80db-8a71-4c23-a73e-feb7ed920005",
+      "name": "Create Retell Batch Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, retell: $json }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "8c4f80db-8a71-4c23-a73e-feb7ed920006",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1300,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: $json.error, invalidRows: $json.invalidRows || [] }) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 400 }}"
+        }
+      },
+      "id": "8c4f80db-8a71-4c23-a73e-feb7ed920007",
+      "name": "Return Validation Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        420
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receive Dashboard Contacts": {
+      "main": [
+        [
+          {
+            "node": "Validate And Build Retell Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate And Build Retell Payload": {
+      "main": [
+        [
+          {
+            "node": "Payload Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload Valid?": {
+      "main": [
+        [
+          {
+            "node": "Create Retell Batch Call",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Retell Batch Call": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "8c4f80db-8a71-4c23-a73e-feb7ed920008",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "nap-outbound-retell-batch-calls",
+  "tags": []
+}

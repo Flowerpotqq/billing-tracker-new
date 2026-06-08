@@ -40,6 +40,7 @@ export const WEBHOOKS = {
   calls: endpoint('calls'),
   transcripts: endpoint('transcripts'),
   invoices: endpoint('invoices'),
+  outboundCalls: endpoint('outbound/retell-batch-v2'),
   callAnalyzed: ENABLE_WEBHOOKS ? `${WEBHOOK_BASE}/nap-call-analyzed` : '',
 }
 

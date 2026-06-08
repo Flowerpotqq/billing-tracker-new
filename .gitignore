@@ -1,4 +1,6 @@
 node_modules/
+dist/
 dist/.env.local
 .env.*
 !.env.example
+test-outbound-contact.csv
